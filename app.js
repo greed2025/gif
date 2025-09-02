@@ -537,6 +537,7 @@
   }
 
   // APNG generation
+
   generateBtn.addEventListener('click', async () => {
     setWarn(''); sizeInfo.textContent = '';
     const defaultText = generateBtn.textContent;
@@ -584,7 +585,7 @@
         setWarn('');
       } else if (result && !result.ok) {
         sizeInfo.textContent = `出力サイズ: ${fmtKB(result.size)} > 300KB`;
-        setWarn('サイズが300KBを超えています。品質を下げるか、フレーム数/時間を調整してください。');
+        setWarn('サイズが300KBを超えています。可能な限り自動圧縮を試みましたが到達しませんでした。品質設定やフレーム数/再生時間の調整をご検討ください。');
       } else {
         setWarn('生成に失敗しました。');
       }
@@ -606,35 +607,78 @@
   }
 
   async function encodeWithBudget() {
-    // Map quality preference to palette sizes (UPNG cnum)
-    const qualityOrder = (() => {
-      if (quality === 'high') return [256, 128, 64];
-      if (quality === 'medium') return [128, 64];
-      return [64];
-    })();
     // Build padded sequence to match selected frame count (5..20)
     const { imgs, delays } = buildEncodingSequence();
     if (imgs.length === 0) throw new Error('フレームがありません');
-    let attempt = 0;
-    for (const cnum of qualityOrder) {
-      attempt++;
-      setProgress(Math.min(95, 10 + Math.round((attempt / qualityOrder.length) * 80)));
-      const apngBuf = UPNG.encode(imgs, CANVAS_W, CANVAS_H, cnum, delays);
-      const looped = setApngLoops(apngBuf, loops);
-      const blob = new Blob([looped], { type: 'image/png' });
-      const size = blob.size;
-      if (size <= SIZE_LIMIT) {
-        return { ok: true, blob, size };
+
+    const baseOrders = {
+      high: [256, 128, 64],
+      medium: [128, 64, 32],
+      low: [64, 32, 16, 8, 4],
+    };
+
+    const tried = [];
+
+    const trySet = async (images, orders, stageLabel = '') => {
+      let i = 0;
+      for (const cnum of orders) {
+        i++;
+        setProgress(Math.min(95, 10 + Math.round(((tried.length + i) / (orders.length + tried.length + 1)) * 80)));
+        const apngBuf = UPNG.encode(images, CANVAS_W, CANVAS_H, cnum, delays);
+        const looped = setApngLoops(apngBuf, loops);
+        const blob = new Blob([looped], { type: 'image/png' });
+        const size = blob.size;
+        if (size <= SIZE_LIMIT) return { ok: true, blob, size };
       }
-      // continue to next lower quality
-      await sleep(50);
+      tried.push(stageLabel || 'stage');
+      return null;
+    };
+
+    // Stage 1: user-selected quality order
+    const order1 = baseOrders[quality] || baseOrders.high;
+    let r = await trySet(imgs, order1, 'base');
+    if (r) return r;
+
+    // Stage 2: extend to lower palettes if needed
+    const more = [32, 16, 8, 4].filter((n) => !order1.includes(n));
+    if (more.length) {
+      r = await trySet(imgs, more, 'more');
+      if (r) return r;
     }
-    // final (lowest quality) result for info
-    const lastCnum = qualityOrder[qualityOrder.length - 1];
-    const apngBuf = UPNG.encode(imgs, CANVAS_W, CANVAS_H, lastCnum, delays);
+
+    // Stage 3: posterize colors to reduce entropy, then try a broad set
+    const broad = [128, 64, 32, 16, 8, 4];
+    for (const bits of [6, 5, 4]) {
+      const qImgs = posterizeImgs(imgs, bits);
+      r = await trySet(qImgs, broad, `posterize${bits}`);
+      if (r) return r;
+      await sleep(30);
+    }
+
+    // Final attempt (most aggressive result) for info
+    const qImgs = posterizeImgs(imgs, 4);
+    const apngBuf = UPNG.encode(qImgs, CANVAS_W, CANVAS_H, 4, delays);
     const looped = setApngLoops(apngBuf, loops);
     const blob = new Blob([looped], { type: 'image/png' });
     return { ok: false, blob, size: blob.size };
+  }
+
+  function posterizeImgs(imgs, bitsRGB = 5) {
+    const out = [];
+    const levels = 1 << bitsRGB; // e.g., 32 for 5 bits, 16 for 4 bits
+    const step = 255 / (levels - 1);
+    for (const src of imgs) {
+      const buf = new Uint8Array(src.length);
+      for (let i = 0; i < src.length; i += 4) {
+        const r = src[i], g = src[i + 1], b = src[i + 2], a = src[i + 3];
+        buf[i] = Math.round(Math.round(r / step) * step);
+        buf[i + 1] = Math.round(Math.round(g / step) * step);
+        buf[i + 2] = Math.round(Math.round(b / step) * step);
+        buf[i + 3] = a; // keep alpha
+      }
+      out.push(buf);
+    }
+    return out;
   }
 
   // PNG chunk helpers: set acTL.num_plays
