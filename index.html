@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APNG Generator</title>
+    <link rel="stylesheet" href="styles.css" />
+    <!-- Compression lib (required by UPNG) -->
+    <script src="vendor/pako.min.js"></script>
+    <!-- Prefer local vendored UPNG.js to avoid CDN issues -->
+    <script src="vendor/UPNG.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>APNGジェネレーター</h1>
+    </header>
+
+    <main class="app-main">
+      <section class="upload-section">
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <div class="dz-inner">
+            <p class="dz-title">ここに画像をドラッグ&ドロップ</p>
+            <p class="dz-sub">または</p>
+            <button id="pickBtn" class="btn">ファイルを選択</button>
+            <input id="fileInput" type="file" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" multiple hidden />
+            <p class="dz-note">対応: JPG, JPEG, PNG, GIF, WebP / 1ファイル最大10MB / 最大20枚</p>
+          </div>
+        </div>
+        <div id="errors" class="errors" role="alert" aria-live="polite"></div>
+        <div id="thumbs" class="thumbs" aria-label="サムネイル並び替え領域"></div>
+      </section>
+
+      <section class="content-grid">
+        <aside class="settings" aria-label="設定パネル">
+          <div class="panel">
+            <h2>設定</h2>
+            <div class="form-row">
+              <label for="frameCount">フレーム数 (5〜20)</label>
+              <div class="range-wrap">
+                <input id="frameCount" type="range" min="5" max="20" step="1" />
+                <input id="frameCountNum" type="number" min="5" max="20" step="1" class="num" />
+              </div>
+            </div>
+            <div class="form-row">
+              <label for="duration">再生時間 (1.0〜4.0 秒)</label>
+              <div class="range-wrap">
+                <input id="duration" type="range" min="1" max="4" step="0.1" />
+                <input id="durationNum" type="number" min="1" max="4" step="0.1" class="num" />
+              </div>
+              <div class="hint" id="fpsInfo">フレーム時間: - ms / フレーム</div>
+            </div>
+            <div class="form-row">
+              <label for="loops">ループ回数 (1〜4)</label>
+              <input id="loops" type="number" min="1" max="4" step="1" />
+            </div>
+            <div class="form-row">
+              <label>アスペクト比</label>
+              <div class="seg">
+                <label><input type="radio" name="aspect" value="crop" checked /> クロップ</label>
+                <label><input type="radio" name="aspect" value="fit" /> フィット</label>
+                <label><input type="radio" name="aspect" value="stretch" /> ストレッチ</label>
+              </div>
+            </div>
+            <div class="form-row">
+              <label>圧縮品質</label>
+              <div class="seg">
+                <label><input type="radio" name="quality" value="high" checked /> 高</label>
+                <label><input type="radio" name="quality" value="medium" /> 中</label>
+                <label><input type="radio" name="quality" value="low" /> 低</label>
+              </div>
+              <div class="hint">目標サイズ: 300KB 以下</div>
+            </div>
+            <div class="form-row">
+              <button id="resetTimes" class="btn btn-ghost">フレーム時間を均等化</button>
+            </div>
+            <div class="form-row small">設定は自動保存されます（ローカル）。</div>
+          </div>
+        </aside>
+
+        <section class="preview" aria-label="プレビュー">
+          <div class="panel">
+            <h2>プレビュー (600×400)</h2>
+            <canvas id="previewCanvas" width="600" height="400"></canvas>
+            <div class="preview-controls">
+              <button id="playBtn" class="btn">再生</button>
+              <button id="stopBtn" class="btn btn-ghost">停止</button>
+            </div>
+            <div id="sizeInfo" class="hint"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="footer-bar">
+        <div class="footer-inner">
+          <button id="generateBtn" class="btn btn-primary">生成してダウンロード</button>
+          <div class="progress" id="progress" hidden>
+            <div class="progress-bar" id="progressBar" style="width:0%"></div>
+          </div>
+          <div id="warn" class="warn" role="alert" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+  </html>
