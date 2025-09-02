@@ -50,6 +50,8 @@
   let loops = 1;
   let aspect = 'crop'; // crop|fit|stretch
   let quality = 'high'; // high|medium|low
+  let minPalette = 32; // minimum allowed palette size when compressing further
+  let posterizeLimit = 4; // allowed lowest bits per channel (4/5/6) or 'none'
   let customTimes = false;
   let isPlaying = false;
   let playTimer = null;
@@ -79,10 +81,12 @@
       if ([1,2,3,4].includes(s.loops)) loops = s.loops;
       if (['crop','fit','stretch'].includes(s.aspect)) aspect = s.aspect;
       if (['high','medium','low'].includes(s.quality)) quality = s.quality;
+      if (typeof s.minPalette === 'number') minPalette = clamp(s.minPalette, 4, 256);
+      if (typeof s.posterizeLimit === 'number') posterizeLimit = clamp(s.posterizeLimit, 4, 6);
     } catch {}
   }
   function saveSettings() {
-    const s = { useFrameCount, durationSec, loops, aspect, quality };
+    const s = { useFrameCount, durationSec, loops, aspect, quality, minPalette, posterizeLimit };
     localStorage.setItem(LS_KEY, JSON.stringify(s));
   }
 
@@ -99,6 +103,10 @@
     document.querySelectorAll('input[name="quality"]').forEach((el) => {
       el.checked = el.value === quality;
     });
+    const minPaletteSel = byId('minPalette');
+    if (minPaletteSel) minPaletteSel.value = String(minPalette);
+    const posterizeSel = byId('posterize');
+    if (posterizeSel) posterizeSel.value = String(posterizeLimit);
     updateFpsInfo();
   }
 
@@ -498,6 +506,28 @@
     });
   });
 
+  // Compression bounds controls
+  const minPaletteSel = byId('minPalette');
+  const posterizeSel = byId('posterize');
+  if (minPaletteSel) {
+    minPaletteSel.addEventListener('change', () => {
+      const val = parseInt(minPaletteSel.value, 10);
+      minPalette = clamp(val || 32, 4, 256);
+      saveSettings();
+    });
+  }
+  if (posterizeSel) {
+    posterizeSel.addEventListener('change', () => {
+      const v = posterizeSel.value;
+      if (v === 'none') {
+        posterizeLimit = 0; // disabled
+      } else {
+        posterizeLimit = clamp(parseInt(v, 10) || 4, 4, 6);
+      }
+      saveSettings();
+    });
+  }
+
   resetTimesBtn.addEventListener('click', (e) => {
     e.preventDefault();
     customTimes = false;
@@ -617,6 +647,10 @@
       low: [64, 32, 16, 8, 4],
     };
 
+    // Palette candidates respecting user's floor
+    const allCnums = [256, 128, 64, 32, 16, 8, 4];
+    const allowedCnums = allCnums.filter((c) => c >= minPalette);
+
     const tried = [];
 
     const trySet = async (images, orders, stageLabel = '') => {
@@ -634,21 +668,29 @@
       return null;
     };
 
-    // Stage 1: user-selected quality order
-    const order1 = baseOrders[quality] || baseOrders.high;
+    // Stage 1: user-selected quality order, filtered by floor
+    let order1 = (baseOrders[quality] || baseOrders.high).filter((c) => c >= minPalette);
+    if (order1.length === 0) {
+      // ensure at least the floor is attempted
+      order1 = [Math.max(...allowedCnums) || 256];
+    }
     let r = await trySet(imgs, order1, 'base');
     if (r) return r;
 
-    // Stage 2: extend to lower palettes if needed
-    const more = [32, 16, 8, 4].filter((n) => !order1.includes(n));
+    // Stage 2: extend to lower palettes if needed (>= floor only)
+    const more = allowedCnums.filter((n) => !order1.includes(n));
     if (more.length) {
       r = await trySet(imgs, more, 'more');
       if (r) return r;
     }
 
     // Stage 3: posterize colors to reduce entropy, then try a broad set
-    const broad = [128, 64, 32, 16, 8, 4];
-    for (const bits of [6, 5, 4]) {
+    const broad = allowedCnums; // keep within floor
+    const bitsCandidates = [6, 5, 4];
+    const bitsAllowed = (posterizeLimit && posterizeLimit >= 4)
+      ? bitsCandidates.filter((b) => b >= posterizeLimit)
+      : [];
+    for (const bits of bitsAllowed) {
       const qImgs = posterizeImgs(imgs, bits);
       r = await trySet(qImgs, broad, `posterize${bits}`);
       if (r) return r;
@@ -656,8 +698,10 @@
     }
 
     // Final attempt (most aggressive result) for info
-    const qImgs = posterizeImgs(imgs, 4);
-    const apngBuf = UPNG.encode(qImgs, CANVAS_W, CANVAS_H, 4, delays);
+    const finalBits = bitsAllowed[bitsAllowed.length - 1];
+    const finalImgs = finalBits ? posterizeImgs(imgs, finalBits) : imgs;
+    const finalCnum = allowedCnums[allowedCnums.length - 1] || 256;
+    const apngBuf = UPNG.encode(finalImgs, CANVAS_W, CANVAS_H, finalCnum, delays);
     const looped = setApngLoops(apngBuf, loops);
     const blob = new Blob([looped], { type: 'image/png' });
     return { ok: false, blob, size: blob.size };

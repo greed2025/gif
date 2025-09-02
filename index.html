@@ -71,6 +71,29 @@
               <div class="hint">目標サイズ: 300KB 以下</div>
             </div>
             <div class="form-row">
+              <label for="minPalette">最低パレット色数（上限を決める）</label>
+              <select id="minPalette" class="num">
+                <option value="4">4</option>
+                <option value="8">8</option>
+                <option value="16">16</option>
+                <option value="32" selected>32</option>
+                <option value="64">64</option>
+                <option value="128">128</option>
+                <option value="256">256（下げない）</option>
+              </select>
+              <div class="hint">必要時のみ、この色数未満には落としません。</div>
+            </div>
+            <div class="form-row">
+              <label for="posterize">ポスタライズ許容（色段階の簡略化）</label>
+              <select id="posterize" class="num">
+                <option value="none">なし（劣化を避ける）</option>
+                <option value="6">6bitまで（やや強）</option>
+                <option value="5">5bitまで（強）</option>
+                <option value="4" selected>4bitまで（最大）</option>
+              </select>
+              <div class="hint">300KB超のときだけ許可した範囲で適用します。</div>
+            </div>
+            <div class="form-row">
               <button id="resetTimes" class="btn btn-ghost">フレーム時間を均等化</button>
             </div>
             <div class="form-row small">設定は自動保存されます（ローカル）。</div>
