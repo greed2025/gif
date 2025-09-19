@@ -356,6 +356,7 @@
   fileInput.addEventListener('change', () => handleFiles(fileInput.files));
   if (resetFramesBtn) {
     resetFramesBtn.addEventListener('click', () => {
+      stopPreview();
       frames = [];
       templateBaseFrames = null;
       selectedTemplateIds = [];
@@ -364,6 +365,7 @@
       previewCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
       saveSettings();
       setWarn('すべてのフレームをリセットしました。');
+      setSizeInfoText('推定サイズ: -');
       queueSizeEstimate();
     });
   }
