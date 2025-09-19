@@ -30,8 +30,15 @@
   const generateBtn = document.getElementById('generateBtn');
   const sizeInfo = document.getElementById('sizeInfo');
   const warn = document.getElementById('warn');
+  const resetFramesBtn = document.getElementById('resetFramesBtn');
   const progress = document.getElementById('progress');
   const progressBar = document.getElementById('progressBar');
+  const framesTray = document.querySelector('.frames-tray');
+  const templateList = document.getElementById('templateList');
+  const templateHint = document.getElementById('templateHint');
+  const durationHintEl = document.getElementById('durationHint');
+  const compressionSlider = document.getElementById('compressionLevel');
+  const compressionHintEl = document.getElementById('compressionHint');
 
   // State
   /**
@@ -56,6 +63,12 @@
   let isPlaying = false;
   let playTimer = null;
   let playIndex = 0;
+  let selectedTemplateIds = [];
+  let templateBaseFrames = null;
+  let compressionLevel = 1;
+  let estimateTimer = null;
+  let estimating = false;
+  let estimatePending = false;
 
   // Utils
   const byId = (id) => document.getElementById(id);
@@ -63,6 +76,129 @@
   const uid = () => Math.random().toString(36).slice(2, 10);
   const fmtKB = (b) => `${(b / 1024).toFixed(1)} KB`;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function cloneFrame(frame) {
+    return {
+      id: frame.id,
+      name: frame.name,
+      file: frame.file || null,
+      thumbUrl: frame.thumbUrl,
+      rgba: frame.rgba ? new Uint8Array(frame.rgba) : null,
+      delayMs: frame.delayMs,
+    };
+  }
+
+  const TEMPLATE_DEFS = [
+    {
+      id: 'none',
+      name: 'なし',
+      description: 'アップロードした写真をそのまま利用します。',
+      frameCount: MIN_FRAMES,
+    },
+    {
+      id: 'soft-zoom',
+      name: 'ソフトズーム',
+      description: 'ゆっくりと拡大するシンプルなズーム演出。',
+      frameCount: 12,
+      coversBase: true,
+      render({ ctx, bitmap, progress, aspect }) {
+        const eased = easeInOut(progress);
+        ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        drawImageWithAspect(ctx, bitmap, aspect, {
+          scale: 1 + 0.15 * eased,
+        });
+        ctx.save();
+        const fade = ctx.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
+        fade.addColorStop(0, 'rgba(255, 255, 255, 0.04)');
+        fade.addColorStop(1, 'rgba(255, 255, 255, 0.08)');
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = fade;
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.restore();
+      },
+    },
+    {
+      id: 'wiggle',
+      name: 'ウィグル',
+      description: 'ランダムな揺れで躍動感を付けます。',
+      frameCount: 12,
+      coversBase: true,
+      render({ ctx, bitmap, index, count = 12, aspect }) {
+        const baseAngle = index * 137.5;
+        const amp = 10;
+        const offsetX = Math.sin((baseAngle * Math.PI) / 180) * amp;
+        const offsetY = Math.cos(((baseAngle + 45) * Math.PI) / 180) * amp;
+        const rotation = Math.sin((index / Math.max(1, count)) * Math.PI * 2) * 3;
+        ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+        drawImageWithAspect(ctx, bitmap, aspect, {
+          scale: 1.01,
+          offsetX,
+          offsetY,
+          rotation,
+        });
+      },
+    },
+    {
+      id: 'pulse-glow',
+      name: 'グローパルス',
+      description: '中心から柔らかい光が脈打つアニメーション。',
+      frameCount: 8,
+      coversBase: false,
+      render({ ctx, bitmap, progress }) {
+        const wave = Math.sin(progress * Math.PI);
+        ctx.save();
+        const glow = ctx.createRadialGradient(CANVAS_W / 2, CANVAS_H / 2, CANVAS_W * 0.05, CANVAS_W / 2, CANVAS_H / 2, CANVAS_W * 0.6);
+        glow.addColorStop(0, `rgba(255, 255, 255, ${0.55 * wave})`);
+        glow.addColorStop(0.7, `rgba(255, 255, 255, ${0.25 * wave})`);
+        glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+        ctx.restore();
+      },
+    },
+    {
+      id: 'alert-frame',
+      name: 'アラートフレーム',
+      description: '赤いフレームが点滅する注意喚起アニメーション。',
+      frameCount: 10,
+      coversBase: false,
+      render({ ctx, bitmap, index = 0, aspect }) {
+        const pulse = index % 2 === 0 ? 1 : 0;
+        if (pulse > 0) {
+          ctx.save();
+          ctx.lineWidth = 14;
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
+          ctx.strokeRect(7, 7, CANVAS_W - 14, CANVAS_H - 14);
+          ctx.restore();
+        }
+      },
+    },
+  ];
+
+  const COMPRESSION_PRESETS = [
+    {
+      level: 0,
+      label: '品質優先',
+      quality: 'high',
+      minPalette: 128,
+      posterize: 0,
+    },
+    {
+      level: 1,
+      label: 'バランス',
+      quality: 'high',
+      minPalette: 32,
+      posterize: 0,
+    },
+    {
+      level: 2,
+      label: 'サイズ優先',
+      quality: 'medium',
+      minPalette: 16,
+      posterize: 4,
+    },
+  ];
 
   function setError(msg) { errors.textContent = msg || ''; }
   function setWarn(msg) { warn.textContent = msg || ''; }
@@ -82,11 +218,17 @@
       if (['crop','fit','stretch'].includes(s.aspect)) aspect = s.aspect;
       if (['high','medium','low'].includes(s.quality)) quality = s.quality;
       if (typeof s.minPalette === 'number') minPalette = clamp(s.minPalette, 4, 256);
-      if (typeof s.posterizeLimit === 'number') posterizeLimit = clamp(s.posterizeLimit, 4, 6);
+      if (typeof s.posterizeLimit === 'number') {
+        posterizeLimit = s.posterizeLimit === 0 ? 0 : clamp(s.posterizeLimit, 4, 6);
+      }
+      if (Array.isArray(s.selectedTemplates)) {
+        selectedTemplateIds = s.selectedTemplates.filter((id) => typeof id === 'string');
+      }
     } catch {}
+    compressionLevel = deriveCompressionLevel();
   }
   function saveSettings() {
-    const s = { useFrameCount, durationSec, loops, aspect, quality, minPalette, posterizeLimit };
+    const s = { useFrameCount, durationSec, loops, aspect, quality, minPalette, posterizeLimit, selectedTemplates: selectedTemplateIds };
     localStorage.setItem(LS_KEY, JSON.stringify(s));
   }
 
@@ -100,20 +242,53 @@
     document.querySelectorAll('input[name="aspect"]').forEach((el) => {
       el.checked = el.value === aspect;
     });
-    document.querySelectorAll('input[name="quality"]').forEach((el) => {
-      el.checked = el.value === quality;
-    });
-    const minPaletteSel = byId('minPalette');
-    if (minPaletteSel) minPaletteSel.value = String(minPalette);
-    const posterizeSel = byId('posterize');
-    if (posterizeSel) posterizeSel.value = String(posterizeLimit);
     updateFpsInfo();
+    syncCompressionSlider();
+  }
+
+  function updateDurationHint() {
+    if (!durationHintEl) return;
+    const rounded = Math.round(durationSec * 10) / 10;
+    durationHintEl.textContent = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  }
+
+  function deriveCompressionLevel() {
+    const preset = COMPRESSION_PRESETS.find((p) =>
+      p.quality === quality && p.minPalette === minPalette && p.posterize === posterizeLimit
+    );
+    return preset ? preset.level : 1;
+  }
+
+  function applyCompressionPreset(level, { updateSlider = true } = {}) {
+    const preset = COMPRESSION_PRESETS.find((p) => p.level === level) || COMPRESSION_PRESETS[1];
+    compressionLevel = preset.level;
+    quality = preset.quality;
+    minPalette = preset.minPalette;
+    posterizeLimit = preset.posterize;
+    if (updateSlider && compressionSlider) compressionSlider.value = String(compressionLevel);
+    if (compressionHintEl) compressionHintEl.textContent = preset.label;
+    saveSettings();
+    queueSizeEstimate();
+  }
+
+  function syncCompressionSlider() {
+    if (!compressionSlider) return;
+    const derived = deriveCompressionLevel();
+    const preset = COMPRESSION_PRESETS.find((p) => p.level === derived);
+    if (!preset) {
+      applyCompressionPreset(1);
+      return;
+    }
+    compressionLevel = derived;
+    compressionSlider.value = String(compressionLevel);
+    if (compressionHintEl) compressionHintEl.textContent = preset.label;
   }
 
   function updateFpsInfo() {
     const n = effectiveTargetCount();
     const ms = Math.round((durationSec * 1000) / n);
     fpsInfo.textContent = `フレーム時間: ${ms} ms / フレーム`;
+    updateDurationHint();
     if (!customTimes) {
       // Update existing frames' base delays; duplicates will follow same delay
       getActiveFrames().forEach((f) => (f.delayMs = ms));
@@ -179,6 +354,19 @@
   });
   pickBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+  if (resetFramesBtn) {
+    resetFramesBtn.addEventListener('click', () => {
+      frames = [];
+      templateBaseFrames = null;
+      selectedTemplateIds = [];
+      renderThumbs();
+      refreshTemplateState();
+      previewCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+      saveSettings();
+      setWarn('すべてのフレームをリセットしました。');
+      queueSizeEstimate();
+    });
+  }
 
   function isSupportedFile(file) {
     const t = (file.type || '').toLowerCase();
@@ -193,8 +381,8 @@
   async function handleFiles(fileList) {
     setError('');
     if (!fileList || fileList.length === 0) return;
+    let incoming = Array.from(fileList);
     const current = frames.length;
-    const incoming = Array.from(fileList);
     const filtered = [];
     for (const f of incoming) {
       if (!isSupportedFile(f)) {
@@ -251,6 +439,13 @@
     saveSettings();
     renderThumbs();
     renderPreviewStatic();
+    templateBaseFrames = frames.map(cloneFrame);
+    refreshTemplateState();
+    if (selectedTemplateIds.length) {
+      await applySelectedTemplates({ silent: true });
+    } else {
+      queueSizeEstimate();
+    }
   }
 
   async function fileToFrame(file, aspectMode) {
@@ -337,6 +532,147 @@
     return canvas.toDataURL('image/png', quality);
   }
 
+  function drawImageWithAspect(ctx, bitmap, aspectMode, opts = {}) {
+    const { scale = 1, offsetX = 0, offsetY = 0, rotation = 0 } = opts;
+    const srcW = bitmap.width;
+    const srcH = bitmap.height;
+    let drawW = CANVAS_W;
+    let drawH = CANVAS_H;
+
+    if (aspectMode === 'stretch') {
+      drawW = CANVAS_W;
+      drawH = CANVAS_H;
+    } else if (aspectMode === 'fit') {
+      const s = Math.min(CANVAS_W / srcW, CANVAS_H / srcH);
+      drawW = srcW * s;
+      drawH = srcH * s;
+    } else {
+      const s = Math.max(CANVAS_W / srcW, CANVAS_H / srcH);
+      drawW = srcW * s;
+      drawH = srcH * s;
+    }
+
+    drawW *= scale;
+    drawH *= scale;
+
+    const centerX = CANVAS_W / 2 + offsetX;
+    const centerY = CANVAS_H / 2 + offsetY;
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    if (rotation) ctx.rotate((rotation * Math.PI) / 180);
+    ctx.drawImage(bitmap, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.restore();
+  }
+
+  function easeInOut(t) {
+    return t < 0.5
+      ? 4 * t * t * t
+      : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  async function generateTemplateFrames(templates, baseFrames, opts = {}) {
+    const list = Array.isArray(templates) ? templates : [templates];
+    if (!list.length) throw new Error('テンプレートが指定されていません。');
+    list.forEach((tpl) => {
+      if (!tpl || typeof tpl.render !== 'function') {
+        throw new Error('テンプレートのレンダリング処理が定義されていません。');
+      }
+    });
+    const sources = Array.isArray(baseFrames) ? baseFrames : [baseFrames];
+    if (!sources.length) throw new Error('テンプレートを適用する元フレームがありません。');
+
+    const singleSource = sources.length === 1;
+    const frameCount = singleSource
+      ? clamp(
+          Math.max(...list.map((tpl) => tpl.frameCount || MIN_FRAMES), MIN_FRAMES),
+          MIN_FRAMES,
+          MAX_FRAMES,
+        )
+      : sources.length;
+    const progressCb = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = CANVAS_W;
+    canvas.height = CANVAS_H;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    const baseTemplate = list.find((tpl) => tpl.coversBase);
+    const overlayTemplates = list.filter((tpl) => !tpl.coversBase);
+
+    const generated = [];
+    for (let i = 0; i < frameCount; i++) {
+      const progress = frameCount === 1 ? 0 : i / (frameCount - 1);
+      const source = singleSource ? sources[0] : sources[i % sources.length];
+      let bitmap = null;
+      if (source?.file) {
+        bitmap = await loadImage(source.file);
+      }
+      const baseStem = source?.name ? source.name.replace(/\.[^.]+$/, '') : 'frame';
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+      if (baseTemplate) {
+        if (bitmap) {
+          baseTemplate.render({ ctx, bitmap, progress, index: i, count: frameCount, aspect });
+        } else if (source?.rgba) {
+          const imgData = new ImageData(new Uint8ClampedArray(source.rgba), CANVAS_W, CANVAS_H);
+          ctx.putImageData(imgData, 0, 0);
+        }
+      } else if (source?.rgba) {
+        const imgData = new ImageData(new Uint8ClampedArray(source.rgba), CANVAS_W, CANVAS_H);
+        ctx.putImageData(imgData, 0, 0);
+      } else if (bitmap) {
+        drawImageWithAspect(ctx, bitmap, aspect, { scale: 1 });
+      }
+
+      overlayTemplates.forEach((tpl) => {
+        const overlayBitmap = bitmap;
+        tpl.render({ ctx, bitmap: overlayBitmap, progress, index: i, count: frameCount, aspect });
+      });
+
+      if (bitmap && typeof bitmap.close === 'function') {
+        bitmap.close();
+      }
+
+      const imgData = ctx.getImageData(0, 0, CANVAS_W, CANVAS_H);
+      const rgba = new Uint8Array(imgData.data);
+      const thumbUrl = canvas.toDataURL('image/png', 0.6);
+      generated.push({
+        id: uid(),
+        name: `${baseStem}-${String(i + 1).padStart(2, '0')}`,
+        file: source?.file || null,
+        thumbUrl,
+        rgba,
+        delayMs: 0,
+      });
+      if (progressCb) progressCb(Math.round(((i + 1) / frameCount) * 100));
+    }
+    const frameDelay = Math.round((durationSec * 1000) / frameCount);
+    generated.forEach((frame) => { frame.delayMs = frameDelay; });
+    return generated;
+  }
+
+  function validateOutputConditions() {
+    const errors = [];
+    if (frameCount && (useFrameCount < MIN_FRAMES || useFrameCount > MAX_FRAMES)) {
+      errors.push(`フレーム数は${MIN_FRAMES}～${MAX_FRAMES}枚にしてください。`);
+    }
+    if (durationSec < 1 || durationSec > 4) {
+      errors.push('再生時間は1～4秒にしてください。');
+    }
+    if (loops < 1 || loops > 4) {
+      errors.push('ループ回数は1～4回にしてください。');
+    }
+    if (!frames.length) {
+      errors.push('画像を追加してください。');
+    }
+    return errors;
+  }
+
   // Thumbnails rendering & reorder
   function renderThumbs() {
     thumbs.innerHTML = '';
@@ -419,6 +755,224 @@
     // Slider range remains 5..20 regardless of current images; duplicates will pad
     frameCount.max = String(MAX_FRAMES);
     frameCountNum.max = String(MAX_FRAMES);
+
+    if (selectedTemplateIds.length === 0) {
+      templateBaseFrames = frames.map(cloneFrame);
+    }
+    refreshTemplateState();
+    if (framesTray) framesTray.hidden = frames.length === 0;
+    if (frames.length === 0) {
+      templateBaseFrames = null;
+      selectedTemplateIds = [];
+      saveSettings();
+    }
+    queueSizeEstimate();
+  }
+
+  function setSizeInfoText(text) {
+    if (sizeInfo) sizeInfo.textContent = text;
+  }
+
+  function queueSizeEstimate() {
+    if (!sizeInfo) return;
+    if (frames.length === 0) {
+      setSizeInfoText('推定サイズ: -');
+      return;
+    }
+    setSizeInfoText('推定サイズ: 計測中...');
+    if (estimateTimer) clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(() => {
+      estimateTimer = null;
+      void runSizeEstimate();
+    }, 400);
+  }
+
+  async function runSizeEstimate() {
+    if (estimating) {
+      estimatePending = true;
+      return;
+    }
+    if (typeof UPNG === 'undefined' || typeof pako === 'undefined') {
+      setSizeInfoText('推定サイズ: -');
+      return;
+    }
+    estimating = true;
+    try {
+      const result = await encodeWithBudget({ onProgress: null, fast: true });
+      if (!result) return;
+      const label = result.ok
+        ? `推定サイズ: ${fmtKB(result.size)}`
+        : `推定サイズ: ${fmtKB(result.size)} (300KB超の可能性)`;
+      setSizeInfoText(label);
+    } catch (err) {
+      console.error('Failed to estimate size', err);
+      setSizeInfoText('推定サイズ: 計測できませんでした');
+    } finally {
+      estimating = false;
+      if (estimatePending) {
+        estimatePending = false;
+        queueSizeEstimate();
+      }
+    }
+  }
+
+  function getTemplateById(id) {
+    return TEMPLATE_DEFS.find((tpl) => tpl.id === id);
+  }
+
+  function renderTemplateOptions() {
+    if (!templateList) return;
+    const cleaned = selectedTemplateIds.filter((id) => getTemplateById(id));
+    if (cleaned.length !== selectedTemplateIds.length) {
+      selectedTemplateIds = cleaned;
+      saveSettings();
+    }
+    templateList.innerHTML = '';
+    TEMPLATE_DEFS.forEach((tpl) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'template-card';
+      btn.dataset.templateId = tpl.id;
+      btn.innerHTML = `
+        <span class="name">${tpl.name}</span>
+        <span class="desc">${tpl.description}</span>
+      `;
+      btn.addEventListener('click', () => { void handleTemplateToggle(tpl.id); });
+      templateList.appendChild(btn);
+    });
+    refreshTemplateState();
+  }
+
+  function refreshTemplateState() {
+    if (!templateList) return;
+    const cleaned = selectedTemplateIds.filter((id) => getTemplateById(id));
+    if (cleaned.length !== selectedTemplateIds.length) {
+      selectedTemplateIds = cleaned;
+      saveSettings();
+    }
+    const canUseTemplates = frames.length > 0;
+    templateList.querySelectorAll('.template-card').forEach((btn) => {
+      const tplId = btn.dataset.templateId;
+      const isNone = tplId === 'none';
+      const isActive = isNone ? selectedTemplateIds.length === 0 : selectedTemplateIds.includes(tplId);
+      btn.classList.toggle('active', isActive);
+      if (isNone) {
+        const disableNone = frames.length === 0;
+        btn.disabled = disableNone;
+        btn.classList.toggle('disabled', disableNone);
+      } else {
+        const isDisabled = !canUseTemplates && !selectedTemplateIds.includes(tplId);
+        btn.disabled = isDisabled;
+        btn.classList.toggle('disabled', isDisabled);
+      }
+    });
+    if (!templateHint) return;
+    if (selectedTemplateIds.length > 0) {
+      const names = selectedTemplateIds
+        .map((id) => getTemplateById(id)?.name)
+        .filter(Boolean)
+        .join('、');
+      templateHint.textContent = `${names} を適用中です。もう一度クリックで解除できます。`;
+    } else if (frames.length === 0) {
+      templateHint.textContent = 'テンプレートを適用するには画像を読み込んでください。';
+    } else {
+      templateHint.textContent = 'テンプレートをクリックして適用できます（複数選択可）。';
+    }
+  }
+
+  function syncTemplateBase() {
+    if (frames.length === 0) {
+      templateBaseFrames = null;
+      return;
+    }
+    if (selectedTemplateIds.length === 0) {
+      templateBaseFrames = frames.map(cloneFrame);
+    }
+  }
+
+  function handleTemplateToggle(templateId) {
+    if (!frames.length) {
+      setWarn('テンプレートを適用するには画像を読み込んでください。');
+      return;
+    }
+
+    if (templateId === 'none') {
+      if (selectedTemplateIds.length === 0) return;
+      selectedTemplateIds = [];
+      saveSettings();
+      refreshTemplateState();
+      void applySelectedTemplates();
+      return;
+    }
+
+    if (selectedTemplateIds.length === 0) {
+      templateBaseFrames = frames.map(cloneFrame);
+    }
+
+    if (selectedTemplateIds.includes(templateId)) {
+      selectedTemplateIds = selectedTemplateIds.filter((id) => id !== templateId);
+    } else {
+      selectedTemplateIds = [...selectedTemplateIds, templateId];
+    }
+    saveSettings();
+    refreshTemplateState();
+    void applySelectedTemplates();
+  }
+
+  async function applySelectedTemplates(opts = {}) {
+    const { silent = false } = opts;
+    stopPreview();
+    if (selectedTemplateIds.length === 0) {
+      if (templateBaseFrames) {
+        frames = templateBaseFrames.map(cloneFrame);
+      }
+      templateBaseFrames = null;
+      customTimes = false;
+      updateFpsInfo();
+      renderThumbs();
+      renderPreviewStatic();
+      queueSizeEstimate();
+      if (!silent) setWarn('');
+      return;
+    }
+
+    if (!templateBaseFrames || !templateBaseFrames.length) {
+      templateBaseFrames = frames.map(cloneFrame);
+    }
+
+    const templates = selectedTemplateIds
+      .map(getTemplateById)
+      .filter(Boolean);
+    if (!templates.length) {
+      selectedTemplateIds = [];
+      saveSettings();
+      refreshTemplateState();
+      return;
+    }
+
+    try {
+      if (!silent) {
+        showProgress(true);
+        setProgress(12);
+      }
+      const generated = await generateTemplateFrames(templates, templateBaseFrames, {
+        onProgress: silent ? null : (pct) => setProgress(12 + Math.round((pct / 100) * 75)),
+      });
+      frames = generated;
+      useFrameCount = clamp(generated.length, MIN_FRAMES, MAX_FRAMES);
+      customTimes = false;
+      updateFpsInfo();
+      renderThumbs();
+      renderPreviewStatic();
+      if (!silent) setWarn('');
+    } catch (err) {
+      console.error(err);
+      if (!silent) setWarn(`テンプレート適用に失敗しました: ${err?.message || err}`);
+    } finally {
+      if (!silent) showProgress(false);
+      refreshTemplateState();
+      queueSizeEstimate();
+    }
   }
 
   function renderPreviewStatic() {
@@ -444,6 +998,7 @@
     updateFpsInfo();
     saveSettings();
     renderThumbs();
+    queueSizeEstimate();
   });
   frameCountNum.addEventListener('change', () => {
     useFrameCount = clamp(parseInt(frameCountNum.value, 10) || MIN_FRAMES, MIN_FRAMES, MAX_FRAMES);
@@ -453,6 +1008,7 @@
     updateFpsInfo();
     saveSettings();
     renderThumbs();
+    queueSizeEstimate();
   });
 
   duration.addEventListener('input', () => {
@@ -461,6 +1017,7 @@
     customTimes = false;
     updateFpsInfo();
     saveSettings();
+    queueSizeEstimate();
   });
   durationNum.addEventListener('change', () => {
     durationSec = clamp(parseFloat(durationNum.value) || 1, 1, 4);
@@ -468,12 +1025,14 @@
     customTimes = false;
     updateFpsInfo();
     saveSettings();
+    queueSizeEstimate();
   });
 
   loopsInput.addEventListener('change', () => {
     loops = clamp(parseInt(loopsInput.value, 10) || 1, 1, 4);
     loopsInput.value = String(loops);
     saveSettings();
+    queueSizeEstimate();
   });
 
   document.querySelectorAll('input[name="aspect"]').forEach((el) => {
@@ -483,48 +1042,35 @@
       saveSettings();
       // Rebuild all frames rgba with new aspect
       if (frames.length) {
-        showProgress(true);
-        let i = 0; const total = frames.length;
-        for (const f of frames) {
-          i++; setProgress(Math.round((i / total) * 100));
-          const bmp = await loadImage(f.file);
-          f.rgba = await rasterizeToRGBA(bmp, aspect);
-          // refresh thumbnail based on new aspect fit
-          f.thumbUrl = rgbaToDataURL(f.rgba, CANVAS_W, CANVAS_H, 0.6);
+        if (selectedTemplateIds.length && templateBaseFrames) {
+          await applySelectedTemplates({ silent: true });
+        } else {
+          showProgress(true);
+          let i = 0; const total = frames.length;
+          for (const f of frames) {
+            i++; setProgress(Math.round((i / total) * 100));
+            if (f.file) {
+              const bmp = await loadImage(f.file);
+              f.rgba = await rasterizeToRGBA(bmp, aspect);
+              f.thumbUrl = rgbaToDataURL(f.rgba, CANVAS_W, CANVAS_H, 0.6);
+              if (typeof bmp.close === 'function') bmp.close();
+            }
+          }
+          showProgress(false);
+          renderThumbs();
+          renderPreviewStatic();
+          if (selectedTemplateIds.length === 0) {
+            templateBaseFrames = frames.map(cloneFrame);
+          }
         }
-        showProgress(false);
-        renderThumbs();
-        renderPreviewStatic();
       }
     });
   });
 
-  document.querySelectorAll('input[name="quality"]').forEach((el) => {
-    el.addEventListener('change', () => {
-      if (!el.checked) return;
-      quality = el.value; saveSettings();
-    });
-  });
-
-  // Compression bounds controls
-  const minPaletteSel = byId('minPalette');
-  const posterizeSel = byId('posterize');
-  if (minPaletteSel) {
-    minPaletteSel.addEventListener('change', () => {
-      const val = parseInt(minPaletteSel.value, 10);
-      minPalette = clamp(val || 32, 4, 256);
-      saveSettings();
-    });
-  }
-  if (posterizeSel) {
-    posterizeSel.addEventListener('change', () => {
-      const v = posterizeSel.value;
-      if (v === 'none') {
-        posterizeLimit = 0; // disabled
-      } else {
-        posterizeLimit = clamp(parseInt(v, 10) || 4, 4, 6);
-      }
-      saveSettings();
+  if (compressionSlider) {
+    compressionSlider.addEventListener('input', () => {
+      const lvl = clamp(parseInt(compressionSlider.value, 10) || 1, 0, 2);
+      applyCompressionPreset(lvl, { updateSlider: false });
     });
   }
 
@@ -532,6 +1078,7 @@
     e.preventDefault();
     customTimes = false;
     updateFpsInfo();
+    queueSizeEstimate();
   });
 
   // Preview playback
@@ -569,7 +1116,13 @@
   // APNG generation
 
   generateBtn.addEventListener('click', async () => {
-    setWarn(''); sizeInfo.textContent = '';
+    setWarn('');
+    const validationErrors = validateOutputConditions();
+    if (validationErrors.length) {
+      setWarn(validationErrors.join(' '));
+      return;
+    }
+    setSizeInfoText('推定サイズ: 計測中...');
     const defaultText = generateBtn.textContent;
     generateBtn.textContent = '生成中...';
     generateBtn.disabled = true;
@@ -589,17 +1142,17 @@
       setWarn('画像を追加してください。');
       generateBtn.textContent = defaultText;
       generateBtn.disabled = false;
+      setSizeInfoText('推定サイズ: -');
       return;
     }
-    const active = getActiveFrames();
     showProgress(true); setProgress(5);
     try {
-      const result = await encodeWithBudget();
+      const result = await encodeWithBudget({ onProgress: setProgress });
       setProgress(100);
       showProgress(false);
       if (result && result.ok) {
         const { blob, size } = result;
-        sizeInfo.textContent = `出力サイズ: ${fmtKB(size)} (上限 300KB)`;
+        setSizeInfoText(`推定サイズ (生成結果): ${fmtKB(size)} / 上限 300KB`);
         // Trigger download immediately
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -614,15 +1167,17 @@
         });
         setWarn('');
       } else if (result && !result.ok) {
-        sizeInfo.textContent = `出力サイズ: ${fmtKB(result.size)} > 300KB`;
-        setWarn('サイズが300KBを超えています。可能な限り自動圧縮を試みましたが到達しませんでした。品質設定やフレーム数/再生時間の調整をご検討ください。');
+        setSizeInfoText(`推定サイズ (生成結果): ${fmtKB(result.size)} (300KB超)`);
+        setWarn('サイズが300KBを超えています。可能な限り自動圧縮を試みましたが到達しませんでした。圧縮バランスを右へ寄せるか、フレーム数や再生時間を調整してください。');
       } else {
         setWarn('生成に失敗しました。');
+        setSizeInfoText('推定サイズ: 計測できませんでした');
       }
     } catch (err) {
       console.error(err);
       showProgress(false);
       setWarn(`生成でエラーが発生しました: ${err?.message || err}`);
+      setSizeInfoText('推定サイズ: 計測できませんでした');
     }
     generateBtn.textContent = defaultText;
     generateBtn.disabled = false;
@@ -636,7 +1191,9 @@
     return `${stem}.png`;
   }
 
-  async function encodeWithBudget() {
+  async function encodeWithBudget(opts = {}) {
+    const { onProgress, fast = false } = opts;
+    const reportProgress = typeof onProgress === 'function' ? (value) => onProgress(value) : () => {};
     // Build padded sequence to match selected frame count (5..20)
     const { imgs, delays } = buildEncodingSequence();
     if (imgs.length === 0) throw new Error('フレームがありません');
@@ -657,7 +1214,7 @@
       let i = 0;
       for (const cnum of orders) {
         i++;
-        setProgress(Math.min(95, 10 + Math.round(((tried.length + i) / (orders.length + tried.length + 1)) * 80)));
+        reportProgress(Math.min(95, 10 + Math.round(((tried.length + i) / (orders.length + tried.length + 1)) * 80)));
         const apngBuf = UPNG.encode(images, CANVAS_W, CANVAS_H, cnum, delays);
         const looped = setApngLoops(apngBuf, loops);
         const blob = new Blob([looped], { type: 'image/png' });
@@ -694,7 +1251,7 @@
       const qImgs = posterizeImgs(imgs, bits);
       r = await trySet(qImgs, broad, `posterize${bits}`);
       if (r) return r;
-      await sleep(30);
+      if (!fast) await sleep(30);
     }
 
     // Final attempt (most aggressive result) for info
@@ -799,7 +1356,11 @@
     duration.min = '1'; duration.max = '4';
     durationNum.min = '1'; durationNum.max = '4';
     loopsInput.min = '1'; loopsInput.max = '4';
+    syncTemplateBase();
+    renderTemplateOptions();
     syncControls();
+    if (framesTray) framesTray.hidden = frames.length === 0;
+    queueSizeEstimate();
   }
 
   init();

@@ -11,50 +11,69 @@
     <script src="vendor/UPNG.js"></script>
   </head>
   <body>
-    <header class="app-header">
-      <h1>APNGジェネレーター</h1>
-    </header>
-
     <main class="app-main">
-      <section class="upload-section">
-        <div id="dropzone" class="dropzone" tabindex="0">
-          <div class="dz-inner">
-            <p class="dz-title">ここに画像をドラッグ&ドロップ</p>
-            <p class="dz-sub">または</p>
-            <button id="pickBtn" class="btn">ファイルを選択</button>
-            <input id="fileInput" type="file" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" multiple hidden />
-            <p class="dz-note">対応: JPG, JPEG, PNG, GIF, WebP / 1ファイル最大10MB / 最大20枚</p>
+      <section class="upload-bar" aria-label="ファイル追加">
+        <div class="upload-bar-inner">
+          <div id="dropzone" class="dropzone" tabindex="0">
+            <div class="dz-inner">
+              <p class="dz-title">ここに画像をドラッグ&ドロップ</p>
+              <p class="dz-sub">または</p>
+              <button id="pickBtn" class="btn">ファイルを選択</button>
+              <input id="fileInput" type="file" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" multiple hidden />
+            </div>
+          </div>
+          <p class="dz-note">対応: JPG, JPEG, PNG, GIF, WebP / 1ファイル最大10MB / 最大20枚</p>
+          <div id="errors" class="errors" role="alert" aria-live="polite"></div>
+          <div class="panel frames-tray" aria-label="フレーム一覧">
+            <div class="frames-header">
+              <h2>フレーム</h2>
+              <button id="resetFramesBtn" class="btn btn-ghost">リセット</button>
+            </div>
+            <div id="thumbs" class="thumbs" aria-label="サムネイル並び替え領域"></div>
           </div>
         </div>
-        <div id="errors" class="errors" role="alert" aria-live="polite"></div>
-        <div id="thumbs" class="thumbs" aria-label="サムネイル並び替え領域"></div>
       </section>
 
-      <section class="content-grid">
-        <aside class="settings" aria-label="設定パネル">
-          <div class="panel">
-            <h2>設定</h2>
+      <section class="workspace">
+        <aside class="panel settings" aria-label="設定パネル">
+          <h2>設定</h2>
+
+          <div class="settings-section">
+            <h3>タイミング</h3>
             <div class="form-row">
-              <label for="frameCount">フレーム数 (5〜20)</label>
-              <div class="range-wrap">
-                <input id="frameCount" type="range" min="5" max="20" step="1" />
-                <input id="frameCountNum" type="number" min="5" max="20" step="1" class="num" />
-              </div>
-            </div>
-            <div class="form-row">
-              <label for="duration">再生時間 (1.0〜4.0 秒)</label>
+              <label for="duration">再生時間</label>
               <div class="range-wrap">
                 <input id="duration" type="range" min="1" max="4" step="0.1" />
                 <input id="durationNum" type="number" min="1" max="4" step="0.1" class="num" />
               </div>
-              <div class="hint" id="fpsInfo">フレーム時間: - ms / フレーム</div>
+              <div class="hint">最短1秒 / 最長4秒。現在 <span id="durationHint">-</span> 秒。</div>
             </div>
             <div class="form-row">
-              <label for="loops">ループ回数 (1〜4)</label>
+              <label for="frameCount">フレーム枚数</label>
+              <div class="range-wrap">
+                <input id="frameCount" type="range" min="5" max="20" step="1" />
+                <input id="frameCountNum" type="number" min="5" max="20" step="1" class="num" />
+              </div>
+              <div class="hint">5～20枚で調整できます。<span id="fpsInfo">フレーム時間: - ms / フレーム</span></div>
+            </div>
+            <div class="form-actions">
+              <button id="resetTimes" class="btn btn-ghost">フレーム時間を均等化</button>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>ループ</h3>
+            <div class="form-row inline">
+              <label for="loops">ループ回数</label>
               <input id="loops" type="number" min="1" max="4" step="1" />
+              <div class="hint">1～4回のループを指定できます。</div>
             </div>
+          </div>
+
+          <div class="settings-section">
+            <h3>画面と圧縮</h3>
             <div class="form-row">
-              <label>アスペクト比</label>
+              <label>アスペクト比処理</label>
               <div class="seg">
                 <label><input type="radio" name="aspect" value="crop" checked /> クロップ</label>
                 <label><input type="radio" name="aspect" value="fit" /> フィット</label>
@@ -62,65 +81,41 @@
               </div>
             </div>
             <div class="form-row">
-              <label>圧縮品質</label>
-              <div class="seg">
-                <label><input type="radio" name="quality" value="high" checked /> 高</label>
-                <label><input type="radio" name="quality" value="medium" /> 中</label>
-                <label><input type="radio" name="quality" value="low" /> 低</label>
+              <label for="compressionLevel">圧縮バランス</label>
+              <div class="range-wrap single">
+                <input id="compressionLevel" type="range" min="0" max="2" step="1" />
               </div>
-              <div class="hint">目標サイズ: 300KB 以下</div>
+              <div class="hint">品質優先 ← <span id="compressionHint">バランス</span> → サイズ優先</div>
             </div>
-            <div class="form-row">
-              <label for="minPalette">最低パレット色数（上限を決める）</label>
-              <select id="minPalette" class="num">
-                <option value="4">4</option>
-                <option value="8">8</option>
-                <option value="16">16</option>
-                <option value="32" selected>32</option>
-                <option value="64">64</option>
-                <option value="128">128</option>
-                <option value="256">256（下げない）</option>
-              </select>
-              <div class="hint">必要時のみ、この色数未満には落としません。</div>
-            </div>
-            <div class="form-row">
-              <label for="posterize">ポスタライズ許容（色段階の簡略化）</label>
-              <select id="posterize" class="num">
-                <option value="none">なし（劣化を避ける）</option>
-                <option value="6">6bitまで（やや強）</option>
-                <option value="5">5bitまで（強）</option>
-                <option value="4" selected>4bitまで（最大）</option>
-              </select>
-              <div class="hint">300KB超のときだけ許可した範囲で適用します。</div>
-            </div>
-            <div class="form-row">
-              <button id="resetTimes" class="btn btn-ghost">フレーム時間を均等化</button>
-            </div>
-            <div class="form-row small">設定は自動保存されます（ローカル）。</div>
           </div>
+
+          <p class="settings-note">各設定は自動保存されます（ローカルストレージ）。</p>
         </aside>
 
-        <section class="preview" aria-label="プレビュー">
-          <div class="panel">
+        <section class="workspace-main" aria-label="プレビュー">
+          <div class="panel preview-panel">
             <h2>プレビュー (600×400)</h2>
             <canvas id="previewCanvas" width="600" height="400"></canvas>
             <div class="preview-controls">
               <button id="playBtn" class="btn">再生</button>
               <button id="stopBtn" class="btn btn-ghost">停止</button>
+              <button id="generateBtn" class="btn btn-primary">生成してダウンロード</button>
+              <div id="sizeInfo" class="size-info" aria-live="polite">推定サイズ: -</div>
             </div>
-            <div id="sizeInfo" class="hint"></div>
+            <div class="preview-status">
+              <div class="progress" id="progress" hidden>
+                <div class="progress-bar" id="progressBar" style="width:0%"></div>
+              </div>
+              <div id="warn" class="warn" role="alert" aria-live="polite"></div>
+            </div>
           </div>
         </section>
-      </section>
 
-      <section class="footer-bar">
-        <div class="footer-inner">
-          <button id="generateBtn" class="btn btn-primary">生成してダウンロード</button>
-          <div class="progress" id="progress" hidden>
-            <div class="progress-bar" id="progressBar" style="width:0%"></div>
-          </div>
-          <div id="warn" class="warn" role="alert" aria-live="polite"></div>
-        </div>
+        <aside class="panel templates" aria-label="テンプレートパネル">
+          <h2>テンプレート</h2>
+          <div id="templateList" class="template-grid" role="group" aria-label="エフェクトテンプレート"></div>
+          <div id="templateHint" class="hint">テンプレートを複数選択して演出を重ねられます。</div>
+        </aside>
       </section>
     </main>
 
