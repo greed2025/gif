@@ -1119,11 +1119,6 @@
 
   generateBtn.addEventListener('click', async () => {
     setWarn('');
-    const validationErrors = validateOutputConditions();
-    if (validationErrors.length) {
-      setWarn(validationErrors.join(' '));
-      return;
-    }
     setSizeInfoText('推定サイズ: 計測中...');
     const defaultText = generateBtn.textContent;
     generateBtn.textContent = '生成中...';
